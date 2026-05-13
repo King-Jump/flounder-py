@@ -202,5 +202,94 @@ class TestMarketDataProcessor:
         assert processor.order_book_bids[0] == (45000.0, 0.5)
 
 
+class TestBinanceWsConnectorIntegration:
+    """
+    集成测试：真实连接到 Binance WebSocket
+    使用 pytest.mark.skipif 标记需要网络连接的测试
+    """
+    
+    def setup_method(self):
+        self.connector = None
+    
+    def teardown_method(self):
+        if self.connector and self.connector.running:
+            self.connector.disconnect()
+    
+    @pytest.mark.integration
+    @pytest.mark.timeout(10)
+    def test_real_binance_connection(self):
+        """测试真实连接到 Binance WebSocket"""
+        self.connector = BinanceWsConnector(symbol="btcusdt", depth_level=10)
+        
+        received_data = []
+        def on_update(depth):
+            received_data.append(depth)
+        
+        self.connector.on_depth_update = on_update
+        self.connector.connect()
+        
+        import time
+        timeout = 8
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if len(received_data) >= 3:
+                break
+            time.sleep(0.5)
+        
+        assert len(received_data) >= 1, "未能接收到深度数据"
+        
+        depth = received_data[0]
+        assert isinstance(depth, DepthData)
+        assert depth.symbol == "BTCUSDT"
+        assert depth.timestamp > 0
+        
+        if len(depth.bids) > 0:
+            assert depth.best_bid > 0
+        if len(depth.asks) > 0:
+            assert depth.best_ask > 0
+    
+    @pytest.mark.integration
+    @pytest.mark.timeout(15)
+    def test_real_connection_reconnect(self):
+        """测试连接断开后自动重连"""
+        self.connector = BinanceWsConnector(symbol="btcusdt", depth_level=10)
+        
+        received_count = [0]
+        def on_update(depth):
+            received_count[0] += 1
+        
+        self.connector.on_depth_update = on_update
+        self.connector.connect()
+        
+        import time
+        timeout = 5
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if received_count[0] >= 2:
+                break
+            time.sleep(0.5)
+        
+        assert received_count[0] >= 1, "初始连接未能接收到数据"
+        
+        initial_count = received_count[0]
+        
+        if self.connector.ws:
+            self.connector.ws.close()
+        
+        time.sleep(2)
+        
+        timeout = 8
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if received_count[0] > initial_count:
+                break
+            time.sleep(0.5)
+        
+        assert received_count[0] > initial_count, "重连后未能继续接收数据"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
