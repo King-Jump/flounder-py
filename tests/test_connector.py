@@ -202,10 +202,23 @@ class TestMarketDataProcessor:
         assert processor.order_book_bids[0] == (45000.0, 0.5)
 
 
+def can_connect_to_binance() -> bool:
+    """检查是否能够连接到 Binance WebSocket"""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex(('stream.binance.com', 443))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
 class TestBinanceWsConnectorIntegration:
     """
     集成测试：真实连接到 Binance WebSocket
-    使用 pytest.mark.skipif 标记需要网络连接的测试
+    需要网络连接，使用 pytest.mark.skipif 标记
     """
     
     def setup_method(self):
@@ -216,7 +229,8 @@ class TestBinanceWsConnectorIntegration:
             self.connector.disconnect()
     
     @pytest.mark.integration
-    @pytest.mark.timeout(10)
+    @pytest.mark.timeout(15)
+    @pytest.mark.skipif(not can_connect_to_binance(), reason="无法连接到 Binance 服务器")
     def test_real_binance_connection(self):
         """测试真实连接到 Binance WebSocket"""
         self.connector = BinanceWsConnector(symbol="btcusdt", depth_level=10)
@@ -224,12 +238,13 @@ class TestBinanceWsConnectorIntegration:
         received_data = []
         def on_update(depth):
             received_data.append(depth)
+            print(f"Received depth update: symbol={depth.symbol}, best_bid={depth.best_bid:.2f}, best_ask={depth.best_ask:.2f}, bids={len(depth.bids)}, asks={len(depth.asks)}, timestamp={depth.timestamp}")
         
         self.connector.on_depth_update = on_update
         self.connector.connect()
         
         import time
-        timeout = 8
+        timeout = 10
         start_time = time.time()
         
         while time.time() - start_time < timeout:
@@ -250,7 +265,8 @@ class TestBinanceWsConnectorIntegration:
             assert depth.best_ask > 0
     
     @pytest.mark.integration
-    @pytest.mark.timeout(15)
+    @pytest.mark.timeout(20)
+    @pytest.mark.skipif(not can_connect_to_binance(), reason="无法连接到 Binance 服务器")
     def test_real_connection_reconnect(self):
         """测试连接断开后自动重连"""
         self.connector = BinanceWsConnector(symbol="btcusdt", depth_level=10)
@@ -263,7 +279,7 @@ class TestBinanceWsConnectorIntegration:
         self.connector.connect()
         
         import time
-        timeout = 5
+        timeout = 8
         start_time = time.time()
         
         while time.time() - start_time < timeout:
@@ -280,7 +296,7 @@ class TestBinanceWsConnectorIntegration:
         
         time.sleep(2)
         
-        timeout = 8
+        timeout = 10
         start_time = time.time()
         
         while time.time() - start_time < timeout:
