@@ -1,7 +1,8 @@
 import logging
 import time
+from typing import Optional
 from trading.config import Config
-from trading.models import OrderType, OrderSide
+from trading.models import OrderType, OrderSide, DepthData, Order
 from strategy.engine import StrategyEngine
 from matcher.engine import OrderManager, OrderMatcher
 from account.manager import AccountManager
@@ -37,7 +38,9 @@ class TradingService:
         
         self.last_pnl_update = 0
     
-    def _on_depth_update(self, depth: 'DepthData'):
+    def _on_depth_update(self, depth: DepthData):
+        """ on depth update, match open orders by depth data, then update pnl and strategy
+        """
         processed_depth = self.market_data_processor.process_depth_update(depth)
         
         pending_orders = self.order_manager.get_open_orders()
@@ -55,65 +58,33 @@ class TradingService:
         self._check_order_updates()
     
     def _check_order_updates(self):
-        for order in self.order_manager.get_all_orders():
-            if order.status.name in ["FILLED", "PARTIALLY_FILLED"]:
-                self.pnl_tracker.record_trade_pnl(order)
-                self.strategy_engine.on_order_update(order)
+        for order in self.order_manager.get_filled_orders():
+            self.pnl_tracker.record_trade_pnl(order)
+            self.strategy_engine.on_order_update(order)
     
     def place_order(self, symbol: str, order_type: OrderType, side: OrderSide,
-                    quantity: float, price: float = None) -> 'Order':
-        order = self.order_manager.create_order(symbol, order_type, side, quantity, price)
-        
+                    quantity: float, price: float = None) -> Optional[Order]:
         base_asset = symbol[:-4]
         quote_asset = "USDT"
         
-        if order_type == OrderType.MARKET:
-            if side == OrderSide.BUY:
-                estimate_price = self.market_data_processor.get_best_ask()
-                total_cost = quantity * estimate_price * (1 + self.config.COMMISSION_RATE)
-                if not self.account_manager.check_balance("default", quote_asset, total_cost):
-                    logger.error("Insufficient balance for market buy order")
-                    self.order_manager.cancel_order(order.order_id)
-                    return order
-                self.account_manager.update_balance("default", quote_asset, locked_change=total_cost)
-            else:
-                if not self.account_manager.check_balance("default", base_asset, quantity):
-                    logger.error("Insufficient balance for market sell order")
-                    self.order_manager.cancel_order(order.order_id)
-                    return order
-                self.account_manager.update_balance("default", base_asset, locked_change=quantity)
+        match_price = self.market_data_processor.get_best_ask() if order_type == OrderType.MARKET else price
+        # check balance and update balance
+        if side == OrderSide.BUY:
+            total_cost = quantity * match_price * (1 + self.config.COMMISSION_RATE)
+            if not self.account_manager.check_balance("default", quote_asset, total_cost):
+                logger.error("Insufficient balance for buy order")
+                return
+            self.account_manager.update_balance("default", quote_asset, locked_change=total_cost)
         else:
-            if side == OrderSide.BUY:
-                total_cost = quantity * price * (1 + self.config.COMMISSION_RATE)
-                if not self.account_manager.check_balance("default", quote_asset, total_cost):
-                    logger.error("Insufficient balance for limit buy order")
-                    self.order_manager.cancel_order(order.order_id)
-                    return order
-                self.account_manager.update_balance("default", quote_asset, locked_change=total_cost)
-            else:
-                if not self.account_manager.check_balance("default", base_asset, quantity):
-                    logger.error("Insufficient balance for limit sell order")
-                    self.order_manager.cancel_order(order.order_id)
-                    return order
-                self.account_manager.update_balance("default", base_asset, locked_change=quantity)
+            if not self.account_manager.check_balance("default", base_asset, quantity):
+                logger.error("Insufficient balance for sell order")
+                return
+            self.account_manager.update_balance("default", base_asset, locked_change=quantity)
         
-        depth = self.market_data_processor.get_order_book_snapshot()
-        depth.symbol = symbol
-        matched_order = self.order_matcher.match_order(order, depth)
-        
-        filled = matched_order.filled_quantity
-        if filled > 0 and matched_order.avg_fill_price:
-            self.account_manager.process_order_fill(matched_order, filled, matched_order.avg_fill_price)
-            
-            if side == OrderSide.BUY:
-                cost = filled * matched_order.avg_fill_price * (1 + self.config.COMMISSION_RATE)
-                self.account_manager.update_balance("default", quote_asset, locked_change=-cost)
-            else:
-                self.account_manager.update_balance("default", base_asset, locked_change=-filled)
-        
-        return matched_order
+        order = self.order_manager.create_order(symbol, order_type, side, quantity, price)
+        return order
     
-    def cancel_order(self, order_id: str) -> 'Order':
+    def cancel_order(self, order_id: str) -> Optional[Order]:
         order = self.order_manager.cancel_order(order_id)
         if order:
             base_asset = order.symbol[:-4]

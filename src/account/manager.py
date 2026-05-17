@@ -8,14 +8,16 @@ logger = logging.getLogger(__name__)
 class AccountManager:
     
     def __init__(self, config: Config = None):
+        self.account_id_counter = 0
         self.config = config or Config()
         self.accounts: Dict[str, Account] = {}
         self.positions: Dict[str, Position] = {}
     
     def create_account(self, initial_balance: Optional[float] = None) -> Account:
         balance = initial_balance or self.config.INITIAL_BALANCE
+        self.account_id_counter += 1
         account = Account(
-            account_id="",
+            account_id=str(self.account_id_counter),
             balances={"USDT": Balance("USDT", free=balance)},
             initial_balance=balance
         )

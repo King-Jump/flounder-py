@@ -7,39 +7,55 @@ logger = logging.getLogger(__name__)
 class OrderManager:
     
     def __init__(self):
-        self.orders: Dict[str, Order] = {}
+        self.order_id_counter = 0
+        self.open_orders: Dict[str, Order] = {}
+        self.filled_orders: Dict[str, Order] = {}
     
     def create_order(self, symbol: str, order_type: OrderType, side: OrderSide,
                      quantity: float, price: Optional[float] = None) -> Order:
+        self.order_id_counter += 1
         order = Order(
-            order_id="",
+            order_id=str(self.order_id_counter),
             symbol=symbol,
             order_type=order_type,
             side=side,
             price=price,
             quantity=quantity
         )
-        self.orders[order.order_id] = order
-        logger.debug(f"Created order: {order.order_id}")
+        self.open_orders[order.order_id] = order
+        logger.debug(f"Created order: {order}")
         return order
     
     def get_order(self, order_id: str) -> Optional[Order]:
-        return self.orders.get(order_id)
+        order = self.open_orders.get(order_id)
+        if not order:
+            order = self.filled_orders.get(order_id)
+            if not order:
+                order = Order(order_id=order_id, status=OrderStatus.CANCELLED)
+        return order
     
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Order]:
-        orders = [order for order in self.orders.values() if order.is_open]
         if symbol:
-            orders = [order for order in orders if order.symbol == symbol]
+            orders = [order for order in self.open_orders.values() if order.symbol == symbol]
+        else:
+            orders = list(self.open_orders.values())
         return orders
     
     def update_order(self, order_id: str, **kwargs) -> Optional[Order]:
-        if order_id not in self.orders:
+        if order_id not in self.open_orders:
             return None
-        order = self.orders[order_id]
+        order = self.open_orders[order_id]
         for key, value in kwargs.items():
             if hasattr(order, key):
                 setattr(order, key, value)
         order.updated_at = int(__import__('datetime').datetime.now().timestamp() * 1000)
+        if order.status == OrderStatus.FILLED:
+            self.filled_orders[order_id] = order
+            del self.open_orders[order_id]
+        elif order.status == OrderStatus.CANCELLED:
+            if order.filled_quantity > 0:
+                self.filled_orders[order_id] = order
+            del self.open_orders[order_id]
         return order
     
     def cancel_order(self, order_id: str) -> Optional[Order]:
@@ -49,10 +65,13 @@ class OrderManager:
         order.status = OrderStatus.CANCELLED
         order.updated_at = int(__import__('datetime').datetime.now().timestamp() * 1000)
         logger.info(f"Order {order_id} cancelled")
+        del self.open_orders[order_id]
+        if order.filled_quantity > 0:
+            self.filled_orders[order_id] = order
         return order
     
-    def get_all_orders(self) -> List[Order]:
-        return list(self.orders.values())
+    def get_filled_orders(self) -> List[Order]:
+        return list(self.filled_orders.values())
 
 class OrderMatcher:
     

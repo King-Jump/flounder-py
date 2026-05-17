@@ -87,6 +87,7 @@ class BinanceWsConnector:
             logger.info("Attempting to reconnect...")
 
 class MarketDataProcessor:
+    """ 内存订单薄 """
     
     def __init__(self):
         self.order_book_bids: List[Tuple[float, float]] = []
